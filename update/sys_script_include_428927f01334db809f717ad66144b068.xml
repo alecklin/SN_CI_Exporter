@@ -4,8 +4,9 @@
         <access>package_private</access>
         <active>true</active>
         <api_name>x_snc_sn_ci_export.CIExporter</api_name>
+        <caller_access/>
         <client_callable>false</client_callable>
-        <description>Class that deals with exporting records</description>
+        <description>Class that deals with exporting records </description>
         <name>CIExporter</name>
         <script><![CDATA[/*
 * Author: Aleck.Lin@ServiceNow.com
@@ -14,50 +15,220 @@
 
 var CIExporter = Class.create();
 CIExporter.prototype = {
+	TABLE_EXCLUSIONS_ARRAY:['automation_error_msg', "sa_payload_snapshot", "discovery_device_history", "sa_discovery_log",
+					  "sa_metric_learned_param", "em_alert_history", "em_alert_anomaly", "sa_ci_anomaly_score", "sn_cmp_cloud_event", "em_impact_status", "sa_metric_anomaly_score", "sa_time_series", "sa_metric_map", "sn_cmp_rsrc_tag_history", "sa_agg_pattern_element_pair", "sa_agg_pattern_element", "sa_analytics_alert", "em_alert", "sa_rca_svc_ci_assoc",
+					  "task_ci", "task",
+					 "fm_expense_line",
+					"sn_cmp_cloud_trail","sn_cmp_stack_item",
+					"duplicate_audit_result",
+					 "cmdb_rel_ci"],
+	
+	
     initialize: function(gr) {
 		this.gr = gr;
+		this.masterRecords = {};
+		this.debugFlag = false;
+		this.TABLE_EXCLUSION = this._setUpExclusions();
     },
 	
 	run: function() {
-		this.exportBaseRecord();
-		this.exportRelatedList();
-		this.exportRelationships();		
+		var totalLevel = 5;
+		
+		this.exportRecord(this.gr);
+		this.exploreRelationships(this.gr, totalLevel);	
+		
+		//gs.info(JSON.stringify(this.masterRecords));				
 	},
 	
-	exportBaseRecord: function() {
-		this._saveRecord(this.gr);
+	// Export record and its references... 
+	exportRecord: function(tgr) {
+		this._exploreRelatedList(tgr);
+	},
+	
+	_exploreRelatedList: function(tgr) {
+		if (this._addToMasterRecord(tgr))			
+			return;
+		
+		//get a list of all the reference tables
+		var refTables = [];
+		var refRefereceFieldNames = [];
+		
+		var dgr = new GlideRecord("sys_dictionary");
+		dgr.addQuery("internal_type", "reference");
+		dgr.addQuery("reference", new GlideTableHierarchy(tgr.sys_class_name).getTables()); 
+		dgr.query();
+		while(dgr.next()) {
+			//this.debug("Find reference tables " + dgr.name);
+			if (this._skipTable(dgr.name+''))
+				continue;				
+			
+			refTables.push(dgr.name+'');
+			refRefereceFieldNames.push(dgr.element+'');
+		}
+		
+		//Get all the reference records
+		for (var i=0; i<refTables.length; i++) {
+			var tableName = refTables[i];
+			var refName = refRefereceFieldNames[i];
+			
+			var gr = new GlideRecord(tableName);
+			gr.addQuery(refName, tgr.sys_id);
+			gr.query();
+			while(gr.next()) {				
+				this._addToMasterRecord(gr);
+			}
+		}				
+	},
+	
+	exploreRelationships: function(tgr, totalLevel) {				
+		// Get child relations (Downstream)
+		this.debug("Get child relationships...");
+		this._exploreDownStream(tgr, 1, totalLevel);
+		
+		// Get parent relations (Upstream)
+		this.debug("Get parent relationships...");	
+		this._exploreUpStream(tgr, 1, totalLevel);		
 		
 	},
 	
-	exportRelatedList: function() {
-		
-		
-	},
-	
-	exportRelationships: function() {
-		
-	},
+	_exploreDownStream: function(tgr, currentLevel, totalLevel) {
+		var curLevel = currentLevel; 				
+		var targetCIs = this._exploreRelationships(tgr, "parent", "child");
 
+		curLevel++;
+		if (curLevel > totalLevel) //Reached the desired level, quit it...
+			return; 		
+		
+		for (var i=0; i<targetCIs.length; i++) {
+			var tCI = targetCIs[i];
+			var tableName = tCI["tableName"];
+			var sysId = tCI["sysId"];
+			
+			var gr = new GlideRecord(tableName);
+			gr.get(sysId);
+			
+			//Recursion!
+			this._exploreDownStream(gr, curLevel, totalLevel);
+		}
+	},
+	
+	_exploreUpStream: function(tgr, level) {		
+		var curLevel = currentLevel; 				
+		var targetCIs = this._exploreRelationships(tgr, "child", "parent");
+
+		curLevel++;
+		if (curLevel > totalLevel) //Reached the desired level, quit it...
+			return; 		
+		
+		for (var i=0; i<targetCIs.length; i++) {
+			var tCI = targetCIs[i];
+			var tableName = tCI["tableName"];
+			var sysId = tCI["sysId"];
+			
+			var gr = new GlideRecord(tableName);
+			gr.get(sysId);
+			
+			//Recursion!
+			this._exploreUpStream(gr, curLevel, totalLevel);
+		}				
+	},
+	
+	_exploreRelationships: function(tgr, source, target) {
+		var targets = [];
+		
+		var relGr = new GlideRecord("cmdb_rel_ci");
+		relGr.addQuery(source, tgr.sys_id);
+		relGr.query();
+		while (relGr.next()) {
+			this._addToMasterRecord(relGr); 
+			var tableName = relGr[target]['sys_class_name'];
+			if (gs.nil(tableName))
+				continue; //Found an invalid record... so skip
+			
+			var gr = new GlideRecord(tableName);
+			var targetSysId = relGr[target]['sys_id'] + '';
+			gr.get(targetSysId);
+			var objGr = {"sysId":targetSysId, "tableName":tableName};			
+			targets.push(objGr);
+			//this.debug("Exporting " + gr.name + " " + gr.getTableName() + " " + gr.sys_id);
+			this.exportRecord(gr); //Export the target CI
+		}			
+		
+		return targets;
+	},
+	
+	// Returning true means that it already exists, otherwise no... 
+	_addToMasterRecord: function(gr) {
+		var grSysId = gr.sys_id + '';
+		
+		if (this.masterRecords[grSysId]) { //Already explored, we're done... 
+			this.debug("This record has been explored already " + gr.getTableName() + " " + gr.sys_id);
+			return true; 
+		}
+			
+		var tableName = gr.getTableName();
+		
+		this.masterRecords[grSysId] = {};
+		this.masterRecords[grSysId]['class'] = tableName;
+		this.masterRecords[grSysId]['sys_id'] = grSysId;
+		
+		this._saveRecord(gr);
+		
+		return false;
+	},		
+
+	/*
+	* Requires the UpdateManager script include (global scope) to be installed along with this 
+	*/
 	_saveRecord: function(gr) {
 		var um = new global.UpdateManager();
 		um.saveRecord(gr);		
 	},
+	
+	_skipTable: function(tableName) {
+		if (this.TABLE_EXCLUSION[tableName])
+			return true;
+		
+		if (tableName.startsWith("discovery_log"))
+			return true;
+		
+		return false;
+		
+	},	
+	
+	_setUpExclusions: function() {
+		var obj = {};
+		for (var i=0; i<this.TABLE_EXCLUSIONS_ARRAY.length; i++)
+			obj[this.TABLE_EXCLUSIONS_ARRAY[i]] = true;
+		
+		return obj;
+	},
+	
+	setDebug: function(flag) {
+		this.debugFlag = flag;
+	},
+	
+	debug: function(msg) {
+		if (!this.debugFlag)
+			return;
+		
+		gs.info("CIExporter: " + msg);
+	},
+	
 	
     type: 'CIExporter'
 };]]></script>
         <sys_class_name>sys_script_include</sys_class_name>
         <sys_created_by>aleck.lin</sys_created_by>
         <sys_created_on>2018-03-10 06:09:55</sys_created_on>
-        <sys_customer_update>false</sys_customer_update>
         <sys_id>428927f01334db809f717ad66144b068</sys_id>
-        <sys_mod_count>2</sys_mod_count>
+        <sys_mod_count>46</sys_mod_count>
         <sys_name>CIExporter</sys_name>
         <sys_package display_value="SN CI Exporter" source="x_snc_sn_ci_export">f14a0af813fc9b809f717ad66144b0b4</sys_package>
         <sys_policy>read</sys_policy>
-        <sys_replace_on_upgrade>false</sys_replace_on_upgrade>
         <sys_scope display_value="SN CI Exporter">f14a0af813fc9b809f717ad66144b0b4</sys_scope>
         <sys_update_name>sys_script_include_428927f01334db809f717ad66144b068</sys_update_name>
         <sys_updated_by>aleck.lin</sys_updated_by>
-        <sys_updated_on>2018-03-10 06:13:27</sys_updated_on>
+        <sys_updated_on>2018-09-03 10:22:44</sys_updated_on>
     </sys_script_include>
 </record_update>
