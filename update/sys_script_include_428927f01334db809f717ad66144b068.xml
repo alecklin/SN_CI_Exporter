@@ -1,5 +1,4 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<record_update table="sys_script_include">
+<?xml version="1.0" encoding="UTF-8"?><record_update table="sys_script_include">
     <sys_script_include action="INSERT_OR_UPDATE">
         <access>package_private</access>
         <active>true</active>
@@ -112,7 +111,7 @@ CIExporter.prototype = {
 		}
 	},
 	
-	_exploreUpStream: function(tgr, level) {		
+	_exploreUpStream: function(tgr, currentLevel, totalLevel) {		
 		var curLevel = currentLevel; 				
 		var targetCIs = this._exploreRelationships(tgr, "child", "parent");
 
@@ -222,13 +221,13 @@ CIExporter.prototype = {
         <sys_created_by>aleck.lin</sys_created_by>
         <sys_created_on>2018-03-10 06:09:55</sys_created_on>
         <sys_id>428927f01334db809f717ad66144b068</sys_id>
-        <sys_mod_count>46</sys_mod_count>
+        <sys_mod_count>47</sys_mod_count>
         <sys_name>CIExporter</sys_name>
         <sys_package display_value="SN CI Exporter" source="x_snc_sn_ci_export">f14a0af813fc9b809f717ad66144b0b4</sys_package>
         <sys_policy>read</sys_policy>
         <sys_scope display_value="SN CI Exporter">f14a0af813fc9b809f717ad66144b0b4</sys_scope>
         <sys_update_name>sys_script_include_428927f01334db809f717ad66144b068</sys_update_name>
         <sys_updated_by>aleck.lin</sys_updated_by>
-        <sys_updated_on>2018-09-03 10:22:44</sys_updated_on>
+        <sys_updated_on>2019-02-23 07:30:21</sys_updated_on>
     </sys_script_include>
 </record_update>
